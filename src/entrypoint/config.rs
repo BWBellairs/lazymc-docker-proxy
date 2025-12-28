@@ -135,7 +135,10 @@ impl Config {
     pub fn start_command(&self) -> Command {
         // Start the docker container if the IP address has not been resolved
         if !self.resolved_ip {
-            docker::start(self.group().into());
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                docker::start(self.group().into()).await;
+            });
         }
 
         let mut command: Command = Command::new(self.start_command.clone());
@@ -359,7 +362,7 @@ impl Config {
     ///
     /// # Deprecated
     #[deprecated(since = "2.1.0", note = "Use `from_container_labels` instead")]
-    pub fn from_env() -> Self {
+    pub async fn from_env() -> Self {
         warn!(target: "lazymc-docker-proxy::entrypoint::config", "***************************************************************************************************************");
         warn!(target: "lazymc-docker-proxy::entrypoint::config", "DEPRECATED: Using Environment Variables to configure lazymc is deprecated. Please use container labels instead.");
         warn!(target: "lazymc-docker-proxy::entrypoint::config", "       see: https://github.com/joesturge/lazymc-docker-proxy?tab=readme-ov-file#usage");
@@ -369,7 +372,7 @@ impl Config {
         if let Ok(value) = var("LAZYMC_GROUP") {
             labels.insert("lazymc.group".to_string(), value.clone());
             // Stop the server container if it is running
-            docker::stop(value.clone())
+            docker::stop(value.clone()).await
         }
         if let Ok(value) = var("LAZYMC_JOIN_METHODS") {
             labels.insert("lazymc.join.methods".to_string(), value);

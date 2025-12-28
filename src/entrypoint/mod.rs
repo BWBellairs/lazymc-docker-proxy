@@ -14,12 +14,12 @@ use crate::{
 };
 
 /// Entrypoint for the application
-pub fn run() {
+pub async fn run() {
     // Ensure all server containers are stopped before starting
     info!(target: "lazymc-docker-proxy::entrypoint", "Ensuring all server containers are stopped...");
-    docker::stop_all_containers();
+    docker::stop_all_containers().await;
 
-    let labels_list = docker::get_container_labels();
+    let labels_list = docker::get_container_labels().await;
     let mut configs: Vec<Config> = Vec::new();
     let mut children: Vec<process::Child> = Vec::new();
 
@@ -28,7 +28,7 @@ pub fn run() {
     }
 
     if configs.is_empty() {
-        configs.push(Config::from_env());
+        configs.push(Config::from_env().await);
     }
 
     for config in configs {
@@ -65,7 +65,10 @@ pub fn run() {
     // If this app receives a signal, stop all server containers
     ctrlc::set_handler(move || {
         info!(target: "lazymc-docker-proxy::entrypoint", "Received exit signal. Stopping all server containers...");
-        docker::stop_all_containers();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            docker::stop_all_containers().await;
+        });
         exit(0);
     }).unwrap();
 
@@ -108,7 +111,10 @@ fn handle_log(group: &str, level: &Level, message: &str) {
         (level, message)
     {
         warn!(target: "lazymc-docker-proxy::entrypoint", "Unexpected server state detected, force stopping {} server container...", group);
-        docker::stop(group.to_string());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            docker::stop(group.to_string()).await;
+        });
         info!(target: "lazymc-docker-proxy::entrypoint", "{} server container forcefully stopped", group);
     }
 }

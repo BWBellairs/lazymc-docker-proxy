@@ -27,16 +27,17 @@ struct Args {
 }
 
 /// Main entrypoint for the application
-fn main() {
+#[tokio::main]
+async fn main() {
     logging::init();
 
     let args: Args = Args::parse();
 
     if args.command {
-        command::run(args.group.unwrap());
+        command::run(args.group.unwrap()).await;
     } else if args.health {
         health::run();
     } else {
-        entrypoint::run();
+        entrypoint::run().await;
     }
 }

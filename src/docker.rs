@@ -5,9 +5,7 @@ use bollard::query_parameters::{
     ListContainersOptions, StartContainerOptions, StopContainerOptions,
 };
 use bollard::Docker;
-use futures::{future, FutureExt};
-use log::error;
-use tokio::runtime::Runtime;
+use log::{debug, error, info, warn};
 
 use crate::health;
 
@@ -23,7 +21,7 @@ pub fn connect() -> Docker {
 }
 
 /// Stop container with the label "lazymc.group=group"
-pub fn stop(group: String) {
+pub async fn stop(group: String) {
     debug!(target: "lazymc-docker-proxy::docker", "Stopping containers...");
     let docker: Docker = connect();
 
@@ -34,35 +32,30 @@ pub fn stop(group: String) {
     list_container_filters.insert("status".to_string(), vec!["running".to_string()]);
     list_container_filters.insert("label".to_string(), vec![format!("lazymc.group={}", group)]);
 
-    // find all matching containers and then stop them using .then()
-    Runtime::new().unwrap().block_on(
-        docker
-            .list_containers(Some(ListContainersOptions {
-                all: true,
-                filters: Some(list_container_filters),
-                ..Default::default()
-            }))
-            .then(|containers| async {
-                debug!(target: "lazymc-docker-proxy::docker", "Found {} container(s) to stop", containers.as_ref().unwrap().len());
-                for container in containers.unwrap() {
-                    info!(target: "lazymc-docker-proxy::docker", "Stopping container: {}", container.names.unwrap().first().unwrap());
-                    if let Err(err) = docker
-                        .stop_container(
-                            container.id.as_ref().unwrap(),
-                            None::<StopContainerOptions>
-                        )
-                        .await
-                    {
-                        error!(target: "lazymc-docker-proxy::docker", "Error stopping container: {}", err);
-                    }
-                }
-                future::ready(()).await
-            }),
-    );
+    // find all matching containers and then stop them
+    let containers = docker
+        .list_containers(Some(ListContainersOptions {
+            all: true,
+            filters: Some(list_container_filters),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    debug!(target: "lazymc-docker-proxy::docker", "Found {} container(s) to stop", containers.len());
+    for container in containers {
+        info!(target: "lazymc-docker-proxy::docker", "Stopping container: {}", container.names.unwrap().first().unwrap());
+        if let Err(err) = docker
+            .stop_container(container.id.as_ref().unwrap(), None::<StopContainerOptions>)
+            .await
+        {
+            error!(target: "lazymc-docker-proxy::docker", "Error stopping container: {}", err);
+        }
+    }
 }
 
 /// Start container with the label "lazymc.group=group"
-pub fn start(group: String) {
+pub async fn start(group: String) -> Option<String> {
     debug!(target: "lazymc-docker-proxy::docker", "Starting containers...");
     let docker: Docker = connect();
 
@@ -73,35 +66,38 @@ pub fn start(group: String) {
     list_container_filters.insert("status".to_string(), vec!["exited".to_string()]);
     list_container_filters.insert("label".to_string(), vec![format!("lazymc.group={}", group)]);
 
-    // find all matching containers and then stop them using .then()
-    Runtime::new().unwrap().block_on(
-        docker
-            .list_containers(Some(ListContainersOptions {
-                all: true,
-                filters: Some(list_container_filters),
-                ..Default::default()
-            }))
-            .then(|containers| async {
-                debug!(target: "lazymc-docker-proxy::docker", "Found {} container(s) to start", containers.as_ref().unwrap().len());
-                for container in containers.unwrap() {
-                    info!(target: "lazymc-docker-proxy::docker", "Starting container: {}", container.names.unwrap().first().unwrap());
-                    if let Err(err) = docker
-                        .start_container(
-                            container.id.as_ref().unwrap(),
-                            None::<StartContainerOptions>,
-                        )
-                        .await
-                    {
-                        error!(target: "lazymc-docker-proxy::docker", "Error starting container: {}", err);
-                    }
-                }
-                future::ready(()).await
-            }),
-    );
+    // find all matching containers and then start them
+    let containers = docker
+        .list_containers(Some(ListContainersOptions {
+            all: true,
+            filters: Some(list_container_filters),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    debug!(target: "lazymc-docker-proxy::docker", "Found {} container(s) to start", containers.len());
+    let mut started_container_id = None;
+    for container in containers {
+        info!(target: "lazymc-docker-proxy::docker", "Starting container: {}", container.names.unwrap().first().unwrap());
+        if let Err(err) = docker
+            .start_container(
+                container.id.as_ref().unwrap(),
+                None::<StartContainerOptions>,
+            )
+            .await
+        {
+            error!(target: "lazymc-docker-proxy::docker", "Error starting container: {}", err);
+        } else {
+            started_container_id = Some(container.id.unwrap());
+        }
+    }
+
+    started_container_id
 }
 
 /// Stop all containers with the label "lazymc.enabled=true"
-pub fn stop_all_containers() {
+pub async fn stop_all_containers() {
     let docker: Docker = connect();
 
     let mut list_container_filters: HashMap<String, Vec<String>> =
@@ -111,35 +107,33 @@ pub fn stop_all_containers() {
     list_container_filters.insert("label".to_string(), vec![format!("lazymc.enabled=true")]);
 
     // find all matching containers and then stop them
-    let containers = Runtime::new().unwrap().block_on(
-        docker
-            .list_containers(Some(ListContainersOptions {
-                all: true,
-                filters: Some(list_container_filters),
-                ..Default::default()
-            }))
-            .then(|containers| async {
-                debug!(target: "lazymc-docker-proxy::docker", "Found {} container(s) to stop", containers.as_ref().unwrap().len());
-                containers.unwrap()
-            }),
-    );
+    let containers = docker
+        .list_containers(Some(ListContainersOptions {
+            all: true,
+            filters: Some(list_container_filters),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    debug!(target: "lazymc-docker-proxy::docker", "Found {} container(s) to stop", containers.len());
 
     for container in containers {
         if let Some(id) = container.id.as_ref() {
-            Runtime::new().unwrap().block_on(
-                docker
-                    .stop_container(id, None::<StopContainerOptions>)
-                    .then(|result| async {
-                        debug!(target: "lazymc-docker-proxy::docker", "Stopped container: {}", id);
-                        result.unwrap()
-                    }),
-            );
+            if let Err(err) = docker
+                .stop_container(id, None::<StopContainerOptions>)
+                .await
+            {
+                error!(target: "lazymc-docker-proxy::docker", "Error stopping container: {}", err);
+            } else {
+                debug!(target: "lazymc-docker-proxy::docker", "Stopped container: {}", id);
+            }
         }
     }
 }
 
 /// Get all labels for containers with the label "lazymc.enabled=true"
-pub fn get_container_labels() -> Vec<HashMap<std::string::String, std::string::String>> {
+pub async fn get_container_labels() -> Vec<HashMap<std::string::String, std::string::String>> {
     let docker: Docker = connect();
 
     let mut list_container_filters: HashMap<String, Vec<String>> =
@@ -149,18 +143,16 @@ pub fn get_container_labels() -> Vec<HashMap<std::string::String, std::string::S
     list_container_filters.insert("label".to_string(), vec![format!("lazymc.enabled=true")]);
 
     // find all matching containers and then get their labels
-    let containers = Runtime::new().unwrap().block_on(
-        docker
-            .list_containers(Some(ListContainersOptions {
-                all: true,
-                filters: Some(list_container_filters),
-                ..Default::default()
-            }))
-            .then(|containers| async {
-                debug!(target: "lazymc-docker-proxy::docker", "Found {} container(s) to get labels", containers.as_ref().unwrap().len());
-                containers.unwrap()
-            }),
-    );
+    let containers = docker
+        .list_containers(Some(ListContainersOptions {
+            all: true,
+            filters: Some(list_container_filters),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    debug!(target: "lazymc-docker-proxy::docker", "Found {} container(s) to get labels", containers.len());
 
     let mut label_sets: Vec<HashMap<String, String>> = Vec::new();
 
